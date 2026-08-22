@@ -1,0 +1,1380 @@
+LCF LIFE CALCULATOR
+ENGINEERING AUDIT AND DEVELOPMENT ROADMAP
+
+Scope
+
+This report documents the current implementation of the repository based on:
+
+- LCF_Life_Calculator.py
+- materials.csv
+- the two reference PDFs in REFERENCES
+
+The goal is to separate what the code actually does from what a more complete fatigue/lifing tool might do later. This is a technical audit only. No project files were modified while producing this report.
+
+------------------------------------------------------------
+
+CURRENT CODE EQUATION AUDIT
+
+1. What the current GUI takes as input
+
+The application prompts for a single scalar input labeled:
+
+- Max Bending Stress (MPa)
+
+The GUI also allows the user to select a material from materials.csv.
+
+The code does not currently ask for:
+
+- minimum stress
+- stress ratio R
+- strain input
+- temperature input
+- cycle block history
+- mean stress
+- number of cycles at multiple amplitudes
+
+2. Material data currently loaded from materials.csv
+
+The CSV supplies the following columns:
+
+- Material
+- E(KPa)
+- K_dash
+- n_dash
+- sigma_f_dash
+- b
+- epsilon_f_dash
+- c
+
+Interpretation used by the code:
+
+- E(KPa) is used numerically as E in the strain-life equation, but the values appear to be stored in MPa even though the header says KPa.
+- K_dash and n_dash are used as cyclic strength coefficient and cyclic strain hardening exponent.
+- sigma_f_dash and b are used as Basquin parameters.
+- epsilon_f_dash and c are used as Coffin-Manson parameters.
+
+Important note:
+
+- The code does not validate whether each row is metallic, whether the constants are cyclic or monotonic, or whether the values are appropriate across temperature.
+
+3. Equations actually implemented in the code
+
+3.1 Elastic strain term
+
+Equation used:
+
+elastic_strain = stress / E
+
+Variables:
+
+- stress: the entered scalar stress value, labeled as Max Bending Stress (MPa)
+- E: Young's modulus from the selected material row
+
+Units:
+
+- stress: MPa if the input label is respected
+- E: numerically treated as MPa, although the CSV header says KPa
+- elastic_strain: dimensionless strain
+
+Physical meaning:
+
+- This is the linear-elastic strain corresponding to the stress value supplied by the user.
+
+Assumptions:
+
+- Small strain linear elasticity
+- No plasticity in the elastic term itself
+- No distinction between axial, bending, torsion, or equivalent stress state beyond the single scalar input
+
+Mathematical assessment:
+
+- The formula itself is correct for engineering strain if stress and modulus are in consistent units.
+
+Consistency with the PDFs:
+
+- This term is consistent with the strain-life framework in Tridello and Paolino, where the elastic term is sigma_f'/E * (2Nf)^b.
+- The code does not directly compute stress amplitude from a stress range or mean stress state, so the PDF consistency is only partial.
+
+3.2 Cyclic Ramberg-Osgood plastic strain term
+
+Equation used:
+
+plastic_strain = (stress / K_dash) ** (1 / n_dash)
+
+Variables:
+
+- stress: the entered scalar stress value
+- K_dash: cyclic strength coefficient
+- n_dash: cyclic strain hardening exponent
+
+Units:
+
+- stress and K_dash must have matching stress units
+- plastic_strain is dimensionless
+
+Physical meaning:
+
+- This is the plastic strain corresponding to a cyclic stress amplitude under the Ramberg-Osgood form.
+
+Assumptions:
+
+- Cyclic Ramberg-Osgood behavior
+- Positive scalar stress input
+- The stress passed into the expression is intended to represent stress amplitude, not stress range or maximum stress
+
+Mathematical assessment:
+
+- The functional form is acceptable for a cyclic Ramberg-Osgood inversion if the input is stress amplitude and K' / n' are cyclic material constants.
+- If the user actually enters maximum stress, the plastic strain is overestimated unless max stress equals stress amplitude.
+- If the entered value is stress range, the plastic strain is also mis-scaled because the formula expects amplitude unless a factor of 2 is handled consistently.
+
+Consistency with the PDFs:
+
+- The form is consistent with the standard strain-life structure used in the Tridello paper, but the code does not implement the paper's statistical or design-curve extensions.
+
+3.3 Total strain amplitude
+
+Equation used:
+
+strain_amplitude = elastic_strain + plastic_strain
+
+Variables:
+
+- elastic_strain: stress / E
+- plastic_strain: (stress / K_dash) ** (1 / n_dash)
+
+Units:
+
+- dimensionless strain amplitude
+
+Physical meaning:
+
+- The total strain amplitude is approximated as the sum of elastic and plastic components.
+
+Assumptions:
+
+- Strain-life decomposition into elastic and plastic parts
+- No mean-stress correction
+- No explicit distinction between total strain amplitude and total strain range in the user interface
+
+Mathematical assessment:
+
+- The structure matches the standard combined strain-life idea.
+- However, the formula is only correct if the input stress is treated as amplitude or equivalent local stress amplitude.
+
+Consistency with the PDFs:
+
+- Consistent with the combined strain-life framework in the Tridello paper's deterministic equation.
+
+3.4 Combined Basquin-Coffin-Manson strain-life equation used for the life solve
+
+Equation used in the root search:
+
+lhs = strain_amplitude
+
+rhs = (sigma_f_dash / E) * (2 * Nf_range) ** b + epsilon_f_dash * (2 * Nf_range) ** c
+
+Then the code finds the Nf value where lhs and rhs are closest.
+
+Variables:
+
+- sigma_f_dash: fatigue strength coefficient
+- E: Young's modulus
+- epsilon_f_dash: fatigue ductility coefficient
+- b: fatigue strength exponent
+- c: fatigue ductility exponent
+- Nf_range: candidate cycles to failure
+
+Units:
+
+- lhs and rhs are dimensionless strain amplitudes
+- Nf_range is cycles to failure
+- 2 * Nf_range is reversals to failure
+
+Physical meaning:
+
+- This is the standard combined elastic-plastic strain-life relation.
+
+Assumptions:
+
+- Strain amplitude is the controlling damage parameter
+- Cycles and reversals are used consistently
+- Material coefficients are valid for the loading condition and temperature
+
+Mathematical assessment:
+
+- The equation itself is correct as a standard strain-life equation written in terms of reversals 2Nf.
+- The search method is numerical nearest-neighbor matching, not a true root solver.
+- Because the code searches over a finite grid, the returned life is approximate and bounded by the grid limits.
+
+Consistency with the PDFs:
+
+- This is consistent with the deterministic total-strain equation shown in the Tridello and Paolino paper.
+- The current implementation does not include the statistical/lognormal model, runout handling, or design-curve construction from that paper.
+
+3.5 Life solution method
+
+Implementation detail:
+
+- The code generates Nf_range = logspace(2, 6, 100000)
+- It evaluates the strain-life equation at every candidate Nf
+- It chooses the index that minimizes abs(lhs - rhs)
+
+Interpretation:
+
+- The solver returns the cycles value whose calculated strain is closest to the target strain.
+
+Assessment:
+
+- Acceptable as a quick estimator.
+- Not ideal for a production engineering tool because:
+  - it does not bracket or solve the root directly
+  - it does not report infeasible inputs cleanly
+  - it clamps life to the search interval without flagging that the true solution may lie outside it
+
+3.6 Reversals versus cycles
+
+The code uses 2 * Nf_range inside the strain-life equation and labels the plot x-axis as reversals to failure.
+
+This is correct for the standard strain-life form:
+
+- Nf = cycles to failure
+- 2Nf = reversals to failure
+
+Important distinction:
+
+- The equation is written in reversals, but the reported result is converted back to cycles.
+
+Assessment:
+
+- Internally consistent in the current implementation.
+
+3.7 Stress amplitude versus stress range
+
+Current behavior:
+
+- The input field is labeled Max Bending Stress (MPa).
+- The code treats that value directly as the stress passed into elastic_strain and plastic_strain.
+
+Implication:
+
+- The code is not explicitly converting between stress range, stress amplitude, and maximum stress.
+
+Critical issue:
+
+- If the user actually provides maximum stress, the code behaves as though that value were the controlling stress amplitude.
+- If the user provides stress range, the code is also wrong unless the range is first divided by 2.
+
+Best interpretation of current implementation:
+
+- The model is effectively a stress-amplitude-based strain-life estimate, despite the label saying max stress.
+
+3.8 Strain amplitude versus strain range
+
+Current behavior:
+
+- The code works with strain amplitude, not strain range.
+
+Important distinction:
+
+- Standard strain-life equations are usually written with strain amplitude, not strain range.
+
+Assessment:
+
+- Internally consistent if the input stress is also an amplitude.
+- The GUI label creates ambiguity and is likely to cause user error.
+
+3.9 Basquin, Coffin-Manson, Ramberg-Osgood status
+
+Basquin:
+
+- Partially implemented as the elastic term in the combined strain-life equation.
+- Not implemented as a standalone HCF life calculator.
+
+Coffin-Manson:
+
+- Partially implemented as the plastic term in the combined strain-life equation.
+- Not implemented as a standalone plastic strain-life calculator.
+
+Combined Basquin-Coffin-Manson:
+
+- Implemented correctly in deterministic form.
+
+Ramberg-Osgood:
+
+- Implemented in inverted form for plastic strain amplitude.
+
+Cyclic Ramberg-Osgood:
+
+- Implemented only if K_dash and n_dash are indeed cyclic values and the input stress is amplitude.
+
+3.10 Numerical correctness summary
+
+The current code is mathematically acceptable as a basic combined strain-life estimator, but only under these conditions:
+
+- the input stress is interpreted as stress amplitude, not maximum stress or full range
+- the CSV modulus values are actually in MPa despite the KPa label
+- the material constants are valid cyclic strain-life constants for the chosen material and condition
+- the user understands the answer is approximate and bounded by the search grid
+
+If those conditions are not met, the output can be materially wrong.
+
+------------------------------------------------------------
+
+PDF-DERIVED METHODS NOT CURRENTLY IMPLEMENTED
+
+The two supplied PDFs support additional ideas, but not all of them are suitable for immediate implementation in the current lightweight calculator.
+
+The descriptions below distinguish between methods that can reasonably estimate life, screening methods, and methods that would be misleading without more data.
+
+1. Standalone Basquin stress-life method
+
+METHOD NAME
+
+Basquin stress-life
+
+EQUATION
+
+sigma_a = sigma_f' * (2Nf)^b
+
+or
+
+Nf = 0.5 * (sigma_a / sigma_f')^(1/b)
+
+PURPOSE
+
+- Estimate high-cycle fatigue life from stress amplitude.
+
+REQUIRED INPUTS
+
+- stress amplitude sigma_a
+
+REQUIRED MATERIAL CONSTANTS
+
+- sigma_f'
+- b
+
+OUTPUT
+
+- cycles to failure Nf
+
+ASSUMPTIONS
+
+- Elastic-dominated fatigue
+- No explicit mean-stress correction
+- Constant amplitude loading
+
+LIMITATIONS
+
+- Not suitable for plasticity-dominated low-cycle regimes.
+
+SOURCE
+
+- Supported by the deterministic strain-life equation in Tridello and Paolino, where the elastic term is sigma_f'/E * (2Nf)^b.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now as a standalone HCF mode and as a diagnostic check.
+
+2. Standalone Coffin-Manson strain-life method
+
+METHOD NAME
+
+Coffin-Manson plastic strain-life
+
+EQUATION
+
+epsilon_pa = epsilon_f' * (2Nf)^c
+
+or
+
+Nf = 0.5 * (epsilon_pa / epsilon_f')^(1/c)
+
+PURPOSE
+
+- Estimate low-cycle fatigue life from plastic strain amplitude.
+
+REQUIRED INPUTS
+
+- plastic strain amplitude epsilon_pa
+
+REQUIRED MATERIAL CONSTANTS
+
+- epsilon_f'
+- c
+
+OUTPUT
+
+- cycles to failure Nf
+
+ASSUMPTIONS
+
+- Plastic strain controls damage
+- Constant amplitude loading
+
+LIMITATIONS
+
+- Not sufficient by itself when elastic strain is significant.
+
+SOURCE
+
+- Supported by the deterministic total-strain equation in Tridello and Paolino.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now as a standalone LCF mode and as a diagnostic output.
+
+3. Combined Basquin plus Coffin-Manson strain-life
+
+METHOD NAME
+
+Combined strain-life
+
+EQUATION
+
+epsilon_a = (sigma_f'/E) * (2Nf)^b + epsilon_f' * (2Nf)^c
+
+PURPOSE
+
+- Estimate fatigue life from total strain amplitude.
+
+REQUIRED INPUTS
+
+- total strain amplitude epsilon_a
+
+REQUIRED MATERIAL CONSTANTS
+
+- E
+- sigma_f'
+- b
+- epsilon_f'
+- c
+
+OUTPUT
+
+- cycles to failure Nf
+
+ASSUMPTIONS
+
+- Standard strain-life decomposition
+- Constant amplitude loading
+
+LIMITATIONS
+
+- Requires the strain amplitude to be known or estimated correctly.
+
+SOURCE
+
+- Explicitly supported by Tridello and Paolino Eq. 1.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now, but correct the input semantics first.
+
+4. Cyclic Ramberg-Osgood
+
+METHOD NAME
+
+Cyclic Ramberg-Osgood stress-strain relation
+
+EQUATION
+
+epsilon_a = sigma_a / E + (sigma_a / K')^(1/n')
+
+PURPOSE
+
+- Convert stress amplitude to strain amplitude under cyclic loading.
+
+REQUIRED INPUTS
+
+- stress amplitude sigma_a
+
+REQUIRED MATERIAL CONSTANTS
+
+- E
+- K'
+- n'
+
+OUTPUT
+
+- strain amplitude epsilon_a
+
+ASSUMPTIONS
+
+- Stabilized cyclic response
+- Material constants are cyclic, not monotonic
+
+LIMITATIONS
+
+- Does not model cycle-by-cycle transient hardening/softening.
+
+SOURCE
+
+- The code already uses the inverted form, and the deterministic strain-life equation in Tridello and Paolino is compatible with this usage.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now, but only after clarifying the stress input as amplitude.
+
+5. Goodman mean-stress correction
+
+METHOD NAME
+
+Goodman correction
+
+EQUATION
+
+sigma_a,eq = sigma_a / (1 - sigma_m / S_u)
+
+PURPOSE
+
+- Adjust alternating stress for mean stress effects.
+
+REQUIRED INPUTS
+
+- sigma_a
+- sigma_m
+
+REQUIRED MATERIAL CONSTANTS
+
+- ultimate tensile strength S_u
+
+OUTPUT
+
+- equivalent stress amplitude sigma_a,eq
+
+ASSUMPTIONS
+
+- Linear mean-stress effect
+- Conservative high-cycle correction
+
+LIMITATIONS
+
+- Not ideal for all materials, but is a common engineering approximation.
+
+SOURCE
+
+- Not derived from the supplied PDFs as a central method, but is a standard basic engineering method appropriate to this calculator family.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now if S_u is added to the materials data.
+
+6. Modified Goodman
+
+METHOD NAME
+
+Modified Goodman
+
+EQUATION
+
+Same basic form as Goodman, often implemented as a design check with an allowable stress reduction based on mean stress.
+
+PURPOSE
+
+- Provide a standard conservative mean-stress correction.
+
+REQUIRED INPUTS
+
+- sigma_a
+- sigma_m
+
+REQUIRED MATERIAL CONSTANTS
+
+- S_u
+
+OUTPUT
+
+- corrected alternating stress or life estimate
+
+ASSUMPTIONS
+
+- Linearized mean-stress effect
+
+LIMITATIONS
+
+- Terminology varies by organization; should be defined explicitly in the UI.
+
+SOURCE
+
+- Standard engineering method; not a main derivation in the supplied PDFs.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement later only if the UI can clearly distinguish it from Goodman.
+
+7. Gerber mean-stress correction
+
+METHOD NAME
+
+Gerber correction
+
+EQUATION
+
+sigma_a,eq = sigma_a / (1 - (sigma_m / S_u)^2)
+
+PURPOSE
+
+- A less conservative mean-stress correction than Goodman.
+
+REQUIRED INPUTS
+
+- sigma_a
+- sigma_m
+
+REQUIRED MATERIAL CONSTANTS
+
+- S_u
+
+OUTPUT
+
+- corrected alternating stress
+
+ASSUMPTIONS
+
+- Parabolic mean-stress sensitivity
+
+LIMITATIONS
+
+- Less conservative and not always preferred for design screening.
+
+SOURCE
+
+- Standard engineering method; not central to the supplied PDFs.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement later, after Goodman.
+
+8. Soderberg mean-stress correction
+
+METHOD NAME
+
+Soderberg correction
+
+EQUATION
+
+sigma_a,eq = sigma_a / (1 - sigma_m / S_y)
+
+PURPOSE
+
+- Conservative mean-stress correction using yield strength.
+
+REQUIRED INPUTS
+
+- sigma_a
+- sigma_m
+
+REQUIRED MATERIAL CONSTANTS
+
+- yield strength S_y
+
+OUTPUT
+
+- corrected alternating stress
+
+ASSUMPTIONS
+
+- Yield-based conservative limit
+
+LIMITATIONS
+
+- Requires yield strength, which is not currently in materials.csv.
+
+SOURCE
+
+- Standard engineering method; not central to the supplied PDFs.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement later if yield strength data are added.
+
+9. Morrow mean-stress-corrected strain-life
+
+METHOD NAME
+
+Morrow correction
+
+EQUATION
+
+epsilon_a = (sigma_f' - sigma_m) / E * (2Nf)^b + epsilon_f' * (2Nf)^c
+
+PURPOSE
+
+- Include mean stress effect in strain-life life prediction.
+
+REQUIRED INPUTS
+
+- epsilon_a
+- sigma_m
+
+REQUIRED MATERIAL CONSTANTS
+
+- E
+- sigma_f'
+- b
+- epsilon_f'
+- c
+
+OUTPUT
+
+- cycles to failure Nf
+
+ASSUMPTIONS
+
+- Mean stress reduces the effective elastic fatigue strength term.
+
+LIMITATIONS
+
+- Needs a defensible definition of mean stress from actual loading history.
+
+SOURCE
+
+- The Tridello paper discusses strain-life distribution around the elastic and plastic terms, but the current code does not implement a mean-stress correction. Morrow is a standard extension suitable for the current framework.
+
+IMPLEMENTATION DIFFICULTY
+
+- Moderate
+
+RECOMMENDATION
+
+- Implement later after baseline strain-life corrections are in place.
+
+10. Smith-Watson-Topper
+
+METHOD NAME
+
+SWT parameter method
+
+EQUATION
+
+sigma_max * epsilon_a = (sigma_f'^2 / E) * (2Nf)^(2b) + sigma_f' * epsilon_f' * (2Nf)^(b+c)
+
+PURPOSE
+
+- Handle mean stress effects using the maximum stress and strain amplitude.
+
+REQUIRED INPUTS
+
+- sigma_max
+- epsilon_a
+
+REQUIRED MATERIAL CONSTANTS
+
+- E
+- sigma_f'
+- b
+- epsilon_f'
+- c
+
+OUTPUT
+
+- cycles to failure Nf
+
+ASSUMPTIONS
+
+- Maximum stress is meaningful and available
+- Damage correlates with the product of peak stress and strain amplitude
+
+LIMITATIONS
+
+- More demanding than the current single-input GUI.
+
+SOURCE
+
+- Standard strain-life extension; not a main equation in the supplied PDFs.
+
+IMPLEMENTATION DIFFICULTY
+
+- Moderate
+
+RECOMMENDATION
+
+- Implement later if a richer stress history input is added.
+
+11. Miner's cumulative damage rule
+
+METHOD NAME
+
+Miner linear damage accumulation
+
+EQUATION
+
+D = sum(n_i / N_i)
+
+Failure indication when D >= 1
+
+PURPOSE
+
+- Estimate cumulative fatigue damage under multiple stress or strain blocks.
+
+REQUIRED INPUTS
+
+- block count n_i for each load level
+- corresponding life N_i for each level
+
+REQUIRED MATERIAL CONSTANTS
+
+- those needed to compute each N_i, typically from Basquin or strain-life equations
+
+OUTPUT
+
+- cumulative damage index D
+
+ASSUMPTIONS
+
+- Linear, sequence-independent damage accumulation
+
+LIMITATIONS
+
+- Does not model load sequence effects, interaction effects, or crack closure.
+
+SOURCE
+
+- Standard fatigue engineering method; compatible with a basic engineering calculator even though it is not explicitly central in the supplied PDFs.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now as a simple block-damage option.
+
+12. Simple thermal strain estimate
+
+METHOD NAME
+
+Simple thermal strain
+
+EQUATION
+
+epsilon_thermal = integral(alpha(T) dT)
+
+For constant alpha:
+
+epsilon_thermal approx alpha * DeltaT
+
+PURPOSE
+
+- Estimate free thermal strain from a temperature change.
+
+REQUIRED INPUTS
+
+- DeltaT
+- coefficient of thermal expansion alpha
+
+REQUIRED MATERIAL CONSTANTS
+
+- alpha
+
+OUTPUT
+
+- thermal strain
+
+ASSUMPTIONS
+
+- Uniform temperature change
+- Small strain
+- No constraint, unless coupled with a separate constraint model
+
+LIMITATIONS
+
+- By itself this is not a fatigue life model.
+
+SOURCE
+
+- Basic mechanics of materials; appropriate for a conservative screening layer in a lifing tool.
+
+IMPLEMENTATION DIFFICULTY
+
+- Easy
+
+RECOMMENDATION
+
+- Implement now as a screening calculation if thermal loading is to be supported.
+
+13. Mechanically constrained thermal stress approximation
+
+METHOD NAME
+
+Constrained thermal stress screening
+
+EQUATION
+
+For fully constrained elastic behavior:
+
+sigma_th approx E * alpha * DeltaT
+
+For strain amplitude screening over a cycle:
+
+epsilon_mech,a approx C * alpha * DeltaT / 2
+
+sigma_th,a approx E * epsilon_mech,a
+
+PURPOSE
+
+- Provide an approximate stress or strain level for thermal cycling under constraint.
+
+REQUIRED INPUTS
+
+- DeltaT
+- alpha
+- E
+- constraint factor C in [0, 1]
+
+REQUIRED MATERIAL CONSTANTS
+
+- alpha
+- E
+
+OUTPUT
+
+- approximate thermal stress or strain amplitude
+
+ASSUMPTIONS
+
+- Elastic response
+- Simple constraint representation
+- No time-dependent creep relief
+
+LIMITATIONS
+
+- This is a screening approximation only.
+- Without constraint and temperature detail, it can be misleading.
+
+SOURCE
+
+- Not a direct replacement for the Metzger and Seifert TMF crack-growth model. It is only a practical engineering approximation for the type of basic tool requested.
+
+IMPLEMENTATION DIFFICULTY
+
+- Moderate
+
+RECOMMENDATION
+
+- Implement later as a screening-only thermal module.
+
+14. Mechanism-based TMF / HCF crack-growth model from Metzger and Seifert
+
+METHOD NAME
+
+Mechanism-based crack-growth TMF / HCF model
+
+EQUATION
+
+The paper includes a crack-growth law of the form:
+
+da/dN = beta * (DeltaCTOD)^B
+
+with a temperature- and stress-dependent CTOD formulation, closure functions, and additive low-cycle and high-cycle crack-growth contributions.
+
+PURPOSE
+
+- Predict crack growth in complex thermal-mechanical loading situations.
+
+REQUIRED INPUTS
+
+- crack size
+- stress and temperature histories
+- closure parameters
+- threshold and growth parameters
+- temperature-dependent and creep-related data
+
+REQUIRED MATERIAL CONSTANTS
+
+- many parameters beyond the current CSV
+
+OUTPUT
+
+- crack growth rate or life to crack extension
+
+ASSUMPTIONS
+
+- Detailed constitutive and crack-closure modeling
+
+LIMITATIONS
+
+- Far beyond a basic engineering calculator.
+- Requires far more material data and history detail than the current repository contains.
+
+SOURCE
+
+- Metzger and Seifert, A Mechanism-Based Model for LCF, HCF and TMF HCF Life Prediction.
+
+IMPLEMENTATION DIFFICULTY
+
+- Difficult
+
+RECOMMENDATION
+
+- Do not implement in the current project scope.
+
+15. Statistical strain-life distribution and design curves from Tridello and Paolino
+
+METHOD NAME
+
+Statistical strain-life and lower-reliability design curves
+
+EQUATION
+
+The paper models elastic, plastic, and total strain-life data statistically with lognormal distributions and likelihood functions.
+
+PURPOSE
+
+- Quantify scatter and construct design curves with a selected reliability.
+
+REQUIRED INPUTS
+
+- fatigue test data set
+- runouts and failures
+- fitting method
+
+REQUIRED MATERIAL CONSTANTS
+
+- statistical parameters, not just deterministic constants
+
+OUTPUT
+
+- fitted mean curve
+- scatter bands
+- design curves at selected reliability
+
+ASSUMPTIONS
+
+- A sufficiently large test database exists
+
+LIMITATIONS
+
+- Not a direct life calculator for a single part.
+- Requires test data beyond the current repository.
+
+SOURCE
+
+- Tridello and Paolino, especially the likelihood and lower-reliability design curve development.
+
+IMPLEMENTATION DIFFICULTY
+
+- Difficult
+
+RECOMMENDATION
+
+- Do not implement in the basic calculator; consider only as a separate materials-data analysis tool.
+
+------------------------------------------------------------
+
+HOW TO CLASSIFY THE THERMAL / TMF OPTIONS
+
+A. Calculations that can reasonably estimate fatigue life
+
+- Standard strain-life with a defensible thermal strain correction when the thermal strain is converted into an equivalent mechanical strain amplitude and the loading is simple enough to approximate.
+- Combined strain-life with mean-stress correction if the stress history is well defined.
+- Simple Miner accumulation if block lives are computed consistently.
+
+B. Calculations that provide only a screening or engineering indicator
+
+- epsilon_thermal = alpha * DeltaT
+- fully constrained thermal stress sigma_th approx E * alpha * DeltaT
+- basic thermal-cycle strain amplitude approximations with a user-selected constraint factor
+
+C. Calculations that would be misleading without substantially more data or modeling
+
+- true TMF life prediction using only alpha, DeltaT, and room-temperature constants
+- any crack-growth-based TMF model without crack size, closure, threshold, and temperature-dependent data
+- creep-fatigue interaction without creep constitutive data
+- oxidation-sensitive life prediction without environmental data
+
+------------------------------------------------------------
+
+CRITICAL ERRORS OR AMBIGUITIES TO FIX FIRST
+
+1. Stress input ambiguity
+
+- The GUI says Max Bending Stress, but the equations behave as though the input is stress amplitude.
+- This is the single most important issue.
+
+2. Stress range versus stress amplitude is not defined
+
+- The code does not calculate sigma_a from sigma_max and sigma_min.
+- It does not compute sigma_m either.
+
+3. Cycles versus reversals are not presented explicitly to the user
+
+- Internally the equation uses 2Nf correctly.
+- The UI does not explain this.
+
+4. CSV unit label for modulus is inconsistent
+
+- The header says E(KPa), but the magnitudes are consistent with MPa.
+
+5. No mean-stress correction
+
+- Goodman, Gerber, Soderberg, Morrow, and SWT are not implemented.
+
+6. No standalone HCF mode
+
+- Basquin is only present as part of the combined equation.
+
+7. No cumulative damage mode
+
+- Miner’s rule is absent.
+
+8. No thermal loading support
+
+- No alpha, DeltaT, constraint factor, or thermal screening logic exists.
+
+9. Search bounded from 10^2 to 10^6 cycles
+
+- If the actual answer lies outside this window, the code silently returns the nearest boundary result.
+
+10. No root bracketing or infeasibility handling
+
+- The code uses nearest-point search rather than a proper solve.
+
+11. No material applicability checks
+
+- The same scalar fatigue formulation is applied to metals, CMC, and C/C composite rows without validation.
+
+12. No temperature or condition metadata
+
+- The CSV does not say whether the constants are room-temperature, elevated-temperature, annealed, aged, forged, welded, or otherwise conditioned.
+
+13. No provenance or test standard information
+
+- There is no source traceability for the constants in the CSV.
+
+14. No uncertainty or scatter information
+
+- The tool returns a single deterministic life only.
+
+15. No load-history input
+
+- The calculator cannot handle variable amplitude loading except through a future Miner-style extension.
+
+------------------------------------------------------------
+
+RECOMMENDED MATERIALS.CSV EXPANSION
+
+The current CSV is adequate only for the existing deterministic combined strain-life calculation. To support the staged roadmap, the following additions are recommended.
+
+Current columns to keep conceptually:
+
+- Material
+- E
+- K_prime
+- n_prime
+- sigma_f_prime
+- b
+- epsilon_f_prime
+- c
+
+Recommended fixes to existing fields:
+
+- Rename E(KPa) to E_MPa if the values are actually in MPa.
+- Use explicit prime notation or clear ASCII equivalents for cyclic constants.
+
+Recommended new columns for a basic but defensible engineering tool:
+
+- S_u_MPa
+- S_y_MPa
+- alpha_per_K
+- nu
+- temperature_C
+- valid_N_min_cycles
+- valid_N_max_cycles
+- material_condition
+- orientation
+- test_standard
+- load_ratio_R_calibration
+- data_source
+- notes
+
+Optional if supported by real data:
+
+- fatigue_limit_MPa
+- fatigue_limit_cycles
+- scatter_log_sigma
+- cyclic_softening_hardening_flag
+
+Important rule:
+
+- Do not invent these values. Add them only when the underlying source data exist.
+
+For thermal screening, alpha_per_K is essential.
+For mean-stress corrections, S_u_MPa and optionally S_y_MPa are essential.
+
+------------------------------------------------------------
+
+RECOMMENDED CALCULATOR ROADMAP
+
+LEVEL 1 - Current LCF calculator corrected and validated
+
+Goal:
+
+- Keep the existing combined strain-life approach, but make the inputs and units explicit.
+
+Implement:
+
+- sigma_a = abs(sigma_max - sigma_min) / 2
+- sigma_m = (sigma_max + sigma_min) / 2
+- strain_amplitude = sigma_a / E + (sigma_a / K')^(1/n')
+- epsilon_a = (sigma_f' / E) * (2Nf)^b + epsilon_f' * (2Nf)^c
+- robust root solve for Nf
+- explicit cycle/reversal labeling
+- out-of-range warnings
+
+Recommendation:
+
+- This is the highest priority cleanup because it resolves the biggest ambiguity in the current code.
+
+LEVEL 2 - Basic LCF plus HCF calculator
+
+Goal:
+
+- Separate high-cycle and low-cycle logic into clear modes.
+
+Implement:
+
+- standalone Basquin stress-life
+- standalone Coffin-Manson plastic strain-life
+- combined Basquin-Coffin-Manson
+- cyclic Ramberg-Osgood
+
+Recommendation:
+
+- Implement now after the stress-input semantics are corrected.
+
+LEVEL 3 - Mean-stress and cumulative-damage methods
+
+Goal:
+
+- Support common engineering corrections for mean stress and variable amplitude loading.
+
+Implement:
+
+- Goodman
+- modified Goodman
+- Gerber
+- Soderberg
+- Morrow
+- Smith-Watson-Topper
+- Miner linear damage accumulation
+
+Recommendation:
+
+- Implement after the baseline LCF/HCF modes are stable and the CSV includes S_u and, where needed, S_y.
+
+LEVEL 4 - Basic thermal / thermo-mechanical screening
+
+Goal:
+
+- Provide approximate engineering guidance for thermal cycling without pretending to be a full TMF solver.
+
+Implement:
+
+- epsilon_thermal = alpha * DeltaT
+- constrained thermal strain screening with a simple constraint factor
+- sigma_th approx E * alpha * DeltaT for fully constrained elastic screening
+- coupling of thermal strain into the existing strain-life framework as an equivalent strain amplitude
+
+Recommendation:
+
+- Implement conservatively and label outputs clearly as screening estimates unless more detailed material and loading data are supplied.
+
+Do not implement in the basic tool:
+
+- full mechanism-based crack-growth TMF models
+- creep-fatigue interaction models
+- oxidation models
+- viscoplastic constitutive models
+
+------------------------------------------------------------
+
+FIRST EQUATION CHANGE TO IMPLEMENT
+
+The first equation change should be the stress-definition fix.
+
+Add and use explicitly:
+
+sigma_a = abs(sigma_max - sigma_min) / 2
+sigma_m = (sigma_max + sigma_min) / 2
+
+Then feed sigma_a into the cyclic Ramberg-Osgood relation and the strain-life relation.
+
+Why this comes first:
+
+- It removes the main ambiguity in the current code.
+- It aligns the user interface with standard fatigue notation.
+- It makes later mean-stress and Miner extensions straightforward.
+
+------------------------------------------------------------
+
+CURRENT CODE EQUATION AUDIT - SHORT VERDICT
+
+- Basquin: partially implemented, only as the elastic term in the combined equation
+- Coffin-Manson: partially implemented, only as the plastic term in the combined equation
+- Combined Basquin-Coffin-Manson: implemented, but only with an ambiguous stress input
+- Ramberg-Osgood: implemented in inverted cyclic form, but only valid if the input is stress amplitude
+- Cyclic Ramberg-Osgood: likely intended and mostly correct under the right input interpretation
+- Stress amplitude versus stress range: not handled explicitly and therefore a major ambiguity
+- Strain amplitude versus strain range: the code uses amplitude form
+- 2Nf versus Nf: implemented consistently internally
+
+------------------------------------------------------------
+
+PDF-DERIVED METHODS NOT CURRENTLY IMPLEMENTED - SHORT LIST
+
+- Standalone Basquin HCF mode
+- Standalone Coffin-Manson LCF mode
+- Mean-stress corrections: Goodman, modified Goodman, Gerber, Soderberg, Morrow, SWT
+- Miner cumulative damage
+- Simple thermal strain
+- Basic constrained thermal screening
+- Statistical design-curve methods from Tridello and Paolino
+- Mechanism-based TMF crack-growth model from Metzger and Seifert
+
+------------------------------------------------------------
+
+RECOMMENDED NEXT STEP
+
+The best first code change is to redefine the input around sigma_max and sigma_min, compute sigma_a and sigma_m explicitly, and then drive the current strain-life equation from sigma_a.
+
+That change will make the rest of the roadmap technically defensible.
+
+------------------------------------------------------------
+
+DISCLAIMER
+
+This is an engineering calculation and educational tool. The current implementation and any future extensions must be independently verified before being used for design, certification, safety-critical decisions, or production lifing work.
