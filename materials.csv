@@ -1,14 +1,14 @@
-Material,E_MPa,K_dash,n_dash,sigma_f_dash,b,epsilon_f_dash,c
-Aluminum 2024-T3,73000,800,0.15,950,-0.09,0.12,-0.6
-Inconel 718,207000,1100,0.12,1200,-0.1,0.08,-0.55
-High-Temp Alloy,180000,950,0.18,1000,-0.095,0.1,-0.58
-Ti-6Al-4V,114000,980,0.13,1050,-0.087,0.09,-0.57
-Nickel 625,207000,1020,0.11,1150,-0.098,0.085,-0.56
-316 Stainless Steel,193000,860,0.19,890,-0.08,0.13,-0.59
-Alloy Steel 4340,210000,1000,0.12,1250,-0.1,0.07,-0.52
-Aluminum 7075-T6,71000,790,0.14,900,-0.091,0.11,-0.6
-Titanium Aluminide (TiAl),170000,920,0.13,980,-0.088,0.075,-0.53
-SiC/SiC Ceramic Matrix Composite,190000,500,0.25,850,-0.07,0.06,-0.5
-C/C Composite,100000,400,0.3,750,-0.065,0.05,-0.48
-Haynes 230,210000,1050,0.14,1120,-0.092,0.07,-0.54
-Rene 41,215000,1100,0.11,1250,-0.096,0.08,-0.55
+Material,E_MPa,K_dash,n_dash,sigma_f_dash,b,epsilon_f_dash,c,S_u_MPa,S_y_MPa,material_condition,property_temperature_C,property_source,property_basis,property_notes
+Aluminum 2024-T3,73000,800,0.15,950,-0.09,0.12,-0.6,483,345,"2024-T3, Aluminum Association typical",24,ASM/MatWeb,Typical,"Generic room-temperature engineering data; not a design allowable; product form and thickness can affect strength."
+Inconel 718,207000,1100,0.12,1200,-0.1,0.08,-0.55,1382,1157,"HAYNES 718 plate, mill annealed + 1325F/8h furnace cool to 1150F/8h air cool",21,Haynes International,Representative manufacturer data,"Strongly heat-treatment, product-form, and temperature dependent."
+High-Temp Alloy,180000,950,0.18,1000,-0.095,0.1,-0.58,,,,,,,,
+Ti-6Al-4V,114000,980,0.13,1050,-0.087,0.09,-0.57,895,828,"TIMETAL 6-4 / ASTM Grade 5 sheet/plate, annealed per ASTM B265",21,TIMET/MatWeb,Minimum-style specification data,"Condition-specific; not a universal Ti-6Al-4V strength."
+Nickel 625,207000,1020,0.11,1150,-0.098,0.085,-0.56,894,417,"HAYNES 625 hot-rolled plate, 1925F mill-annealed",21,Haynes International,Representative manufacturer data,"Product form and annealing condition affect strength."
+316 Stainless Steel,193000,860,0.19,890,-0.08,0.13,-0.59,515,205,"ATI 316 / UNS S31600, annealed ASTM A240 plate/sheet",21,ATI,Minimum specification data,"Applies to the stated annealed product condition."
+Alloy Steel 4340,210000,1000,0.12,1250,-0.1,0.07,-0.52,1282,862,"AISI 4340, normalized, 25 mm round",21,ASM/MatWeb,Representative condition-specific data,"4340 strength varies strongly with heat treatment and hardness."
+Aluminum 7075-T6,71000,790,0.14,900,-0.091,0.11,-0.6,572,503,"7075-T6, Aluminum Association typical",24,ASM/MatWeb,Typical,"Generic room-temperature engineering data; not a design allowable."
+Titanium Aluminide (TiAl),170000,920,0.13,980,-0.088,0.075,-0.53,,,,,,,,
+SiC/SiC Ceramic Matrix Composite,190000,500,0.25,850,-0.07,0.06,-0.5,,,,,,,,
+C/C Composite,100000,400,0.3,750,-0.065,0.05,-0.48,,,,,,,,
+Haynes 230,210000,1050,0.14,1120,-0.092,0.07,-0.54,852,383,"HAYNES 230 plate, solution annealed",21,Haynes International,Representative manufacturer data,"Sheet and plate values can differ."
+Rene 41,215000,1100,0.11,1250,-0.096,0.08,-0.55,1416,1064,"HAYNES R-41, age hardened 1400F/16h/air cool",21,Haynes International,Representative manufacturer data,"Multiple valid heat treatments exist."
