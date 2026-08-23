@@ -23,7 +23,23 @@ REQUIRED_PROPERTIES = {
         "static": ["S_u_MPa"],
         "fatigue": ["sigma_f_dash", "b"],
     },
+    ("HCF", "Walker"): {
+        "static": [],
+        "fatigue": ["sigma_f_dash", "b"],
+        "walker": ["Walker_gamma"],
+    },
     ("LCF", "None"): {
+        "static": ["E_MPa"],
+        "fatigue": [
+            "K_dash",
+            "n_dash",
+            "sigma_f_dash",
+            "b",
+            "epsilon_f_dash",
+            "c",
+        ],
+    },
+    ("LCF", "SWT"): {
         "static": ["E_MPa"],
         "fatigue": [
             "K_dash",
@@ -44,6 +60,18 @@ REQUIRED_PROPERTIES = {
             "epsilon_f_dash",
             "c",
         ],
+    },
+    ("LCF", "Walker"): {
+        "static": ["E_MPa"],
+        "fatigue": [
+            "K_dash",
+            "n_dash",
+            "sigma_f_dash",
+            "b",
+            "epsilon_f_dash",
+            "c",
+        ],
+        "walker": ["Walker_gamma"],
     },
 }
 
@@ -74,6 +102,7 @@ class TemperatureCapabilityResult:
     unresolved_properties: list[str]
     static_condition: str
     fatigue_condition: str
+    walker_condition: str
     summary: str
     warnings: list[str]
 
@@ -85,8 +114,10 @@ def assess_temperature_capability(
     mean_stress_correction,
     static_rows,
     fatigue_rows,
+    walker_rows=None,
     static_condition=None,
     fatigue_condition=None,
+    walker_condition=None,
 ):
     """Assess whether a requested fatigue calculation is temperature-resolved."""
     mode = _normalize_mode(analysis_mode)
@@ -105,7 +136,7 @@ def assess_temperature_capability(
     resolved = []
     warnings = []
 
-    for property_name in required["static"]:
+    for property_name in required.get("static", []):
         resolved.append(
             _resolve_property(
                 static_rows,
@@ -117,7 +148,7 @@ def assess_temperature_capability(
             )
         )
 
-    for property_name in required["fatigue"]:
+    for property_name in required.get("fatigue", []):
         resolved.append(
             _resolve_property(
                 fatigue_rows,
@@ -126,6 +157,18 @@ def assess_temperature_capability(
                 temperature_C,
                 fatigue_condition,
                 "fatigue",
+            )
+        )
+
+    for property_name in required.get("walker", []):
+        resolved.append(
+            _resolve_property(
+                walker_rows or [],
+                material,
+                property_name,
+                temperature_C,
+                walker_condition,
+                "walker",
             )
         )
 
@@ -142,19 +185,29 @@ def assess_temperature_capability(
 
     actual_static_condition = _first_condition(resolved, "static") or static_condition or ""
     actual_fatigue_condition = _first_condition(resolved, "fatigue") or fatigue_condition or ""
+    actual_walker_condition = _first_condition(resolved, "walker") or walker_condition or ""
     condition_compatibility = _condition_compatibility(
         actual_static_condition,
         actual_fatigue_condition,
-        needs_static=bool(required["static"]),
-        needs_fatigue=bool(required["fatigue"]),
+        actual_walker_condition,
+        needs_static=bool(required.get("static", [])),
+        needs_fatigue=bool(required.get("fatigue", [])),
+        needs_walker=bool(required.get("walker", [])),
     )
 
     static_available = _all_group_available(resolved, "static")
     fatigue_available = _all_group_available(resolved, "fatigue")
+    walker_available = _all_group_available(resolved, "walker")
     all_required_available = not unresolved_names
+    estimated_walker = _has_estimated_walker_gamma(resolved)
 
-    if all_required_available and condition_compatibility in {MATCH, UNKNOWN}:
+    if all_required_available and condition_compatibility in {MATCH, UNKNOWN} and not estimated_walker:
         capability = FULLY_TEMPERATURE_RESOLVED
+    elif all_required_available and estimated_walker:
+        capability = PARTIALLY_TEMPERATURE_INFORMED
+        warnings.append(
+            "Walker gamma is available only as an estimated parameter; the calculation cannot be labeled fully temperature-resolved."
+        )
     elif all_required_available and condition_compatibility in {PARTIAL_MATCH, MISMATCH}:
         capability = PARTIALLY_TEMPERATURE_INFORMED
         warnings.append(
@@ -165,7 +218,17 @@ def assess_temperature_capability(
         warnings.append(
             "Some temperature-resolved static properties are available, but required fatigue constants are not fully resolved."
         )
-    elif _has_any_available_group(resolved, "fatigue") and required["static"] and not static_available:
+    elif _has_any_available_group(resolved, "walker") and not fatigue_available:
+        capability = PARTIALLY_TEMPERATURE_INFORMED
+        warnings.append(
+            "Walker gamma is available, but required fatigue constants are not fully resolved."
+        )
+    elif _has_any_available_group(resolved, "fatigue") and required.get("walker", []) and not walker_available:
+        capability = UNAVAILABLE
+        warnings.append(
+            "Required fatigue constants are available, but Walker gamma is unavailable at the selected temperature."
+        )
+    elif _has_any_available_group(resolved, "fatigue") and required.get("static", []) and not static_available:
         capability = UNAVAILABLE
         warnings.append(
             "Required fatigue constants are available, but required static properties are unavailable."
@@ -196,6 +259,7 @@ def assess_temperature_capability(
         unresolved_properties=unresolved_names,
         static_condition=actual_static_condition,
         fatigue_condition=actual_fatigue_condition,
+        walker_condition=actual_walker_condition,
         summary=summary,
         warnings=warnings,
     )
@@ -216,23 +280,50 @@ def _resolve_property(rows, material, property_name, temperature_C, condition, g
     )
 
 
-def _condition_compatibility(static_condition, fatigue_condition, needs_static, needs_fatigue):
-    if not needs_static or not needs_fatigue:
-        return UNKNOWN
-    if not static_condition or not fatigue_condition:
+def _condition_compatibility(
+    static_condition,
+    fatigue_condition,
+    walker_condition,
+    needs_static,
+    needs_fatigue,
+    needs_walker,
+):
+    comparisons = []
+    if needs_static and needs_fatigue:
+        comparisons.append(_compare_conditions(static_condition, fatigue_condition))
+    if needs_walker and needs_fatigue:
+        comparisons.append(_compare_conditions(fatigue_condition, walker_condition))
+    elif needs_walker and needs_static:
+        comparisons.append(_compare_conditions(static_condition, walker_condition))
+
+    comparisons = [item for item in comparisons if item]
+    if not comparisons:
         return UNKNOWN
 
-    static_norm = _normalize_condition(static_condition)
-    fatigue_norm = _normalize_condition(fatigue_condition)
-    if static_norm == fatigue_norm:
+    if MISMATCH in comparisons:
+        return MISMATCH
+    if PARTIAL_MATCH in comparisons:
+        return PARTIAL_MATCH
+    if all(item == MATCH for item in comparisons):
+        return MATCH
+    return UNKNOWN
+
+
+def _compare_conditions(first_condition, second_condition):
+    if not first_condition or not second_condition:
+        return UNKNOWN
+
+    first_norm = _normalize_condition(first_condition)
+    second_norm = _normalize_condition(second_condition)
+    if first_norm == second_norm:
         return MATCH
 
-    static_tokens = set(static_norm.split())
-    fatigue_tokens = set(fatigue_norm.split())
-    if _has_strong_condition_mismatch(static_tokens, fatigue_tokens):
+    first_tokens = set(first_norm.split())
+    second_tokens = set(second_norm.split())
+    if _has_strong_condition_mismatch(first_tokens, second_tokens):
         return MISMATCH
 
-    shared = static_tokens & fatigue_tokens
+    shared = first_tokens & second_tokens
     if not shared:
         return UNKNOWN
 
@@ -323,6 +414,13 @@ def _first_condition(resolved, group):
     return ""
 
 
+def _has_estimated_walker_gamma(resolved):
+    for item in resolved:
+        if item.property_name == "Walker_gamma" and "estimated" in item.basis.lower():
+            return True
+    return False
+
+
 def _build_summary(
     material,
     temperature_C,
@@ -368,6 +466,7 @@ def _invalid_request_result(material, temperature_C, analysis_mode, correction, 
         unresolved_properties=[],
         static_condition="",
         fatigue_condition="",
+        walker_condition="",
         summary=warning,
         warnings=[warning],
     )

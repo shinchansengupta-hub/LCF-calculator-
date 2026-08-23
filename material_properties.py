@@ -10,6 +10,7 @@ FATIGUE_PROPERTIES = {
     "b",
     "epsilon_f_dash",
     "c",
+    "Walker_gamma",
 }
 
 

@@ -19,7 +19,18 @@ def warning_stub(parent, title, message):
 QMessageBox.warning = warning_stub
 
 
-def run_case(window, *, material, mode, correction, temperature, sigma_max, sigma_min, legacy):
+def run_case(
+    window,
+    *,
+    material,
+    mode,
+    correction,
+    temperature,
+    sigma_max,
+    sigma_min,
+    legacy,
+    local_correction=None,
+):
     warnings_seen.clear()
     window.material_box.setCurrentText(material)
     window.analysis_mode_box.setCurrentText(mode)
@@ -29,8 +40,14 @@ def run_case(window, *, material, mode, correction, temperature, sigma_max, sigm
     window.sigma_max_input.setText(str(sigma_max))
     window.sigma_min_input.setText(str(sigma_min))
     window.legacy_fallback_box.setChecked(legacy)
+    if local_correction is not None and hasattr(window, "local_correction_box"):
+        window.local_correction_box.setCurrentText(local_correction)
+        window.update_lcf_local_correction_ui()
     window.calculate_life()
-    return window.result_label.text(), list(warnings_seen), window.ax.get_title()
+    plot_title = ""
+    if window.plot_window is not None:
+        plot_title = window.plot_window.ax.get_title()
+    return window.result_text.toPlainText(), list(warnings_seen), plot_title
 
 
 def require_contains(text, fragment, label):
@@ -172,6 +189,38 @@ def main():
         print(text.splitlines()[0:8])
         print(warnings)
         print("-" * 60)
+
+    partial_text, _, _ = run_case(
+        window,
+        material="Inconel 718",
+        mode="Strain-Life / LCF",
+        correction="None",
+        temperature=537.85,
+        sigma_max=800,
+        sigma_min=0,
+        legacy=False,
+        local_correction="Neuber",
+    )
+    require_contains(
+        partial_text,
+        "Calculation Status: READY_WITH_CONDITION_WARNING",
+        "Partial-match Neuber readiness",
+    )
+    require_contains(
+        partial_text,
+        "Condition Compatibility: PARTIAL_MATCH",
+        "Partial-match Neuber compatibility",
+    )
+    if "TEMPERATURE DATA UNAVAILABLE" in partial_text:
+        raise AssertionError(
+            "Partial-match Neuber case must not be reported as temperature unavailable.\n"
+            f"{partial_text}"
+        )
+    require_contains(
+        partial_text,
+        "Elastic pseudo-reference stress amplitude (MPa): 400",
+        "Partial-match Neuber reference amplitude",
+    )
 
     require_contains(
         run_case(

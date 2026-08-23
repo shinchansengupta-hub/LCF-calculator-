@@ -8,3 +8,17 @@ build/
 dist/
 .idea/
 *.iml
+handbook_mining/output/
+handbook_mining/cache/
+handbook_mining/tmp_render/
+REFERENCES/*.pdf
+REFERENCES/*.html
+REFERENCES/*_files/
+tmp/
+tmp_*.png
+*_temperature_crop.png
+*_review_fits.csv
+*_database_review.csv
+*_digitized.csv
+*_metadata.csv
+*_validation_candidates.csv
